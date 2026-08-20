@@ -188,7 +188,7 @@ func TestDeserialize_UnknownAttestationTagPreserved(t *testing.T) {
 	var data []byte
 	data = append(data, 0x00)
 	data = append(data, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x11, 0x22) // unrecognized 8-byte tag
-	data = append(data, 0x03)                                          // payload length
+	data = append(data, 0x03)                                           // payload length
 	data = append(data, []byte("xyz")...)
 
 	ts, err := DeserializeTimestamp(data, []byte("foo"))

@@ -29,7 +29,7 @@ import (
 // byte-for-byte (sub-second precision is dropped, not preserved-then-lost).
 type Evidence struct {
 	ContentHash string    `json:"content_hash"` // hex-encoded SHA-256 of the file's bytes
-	Filename    string    `json:"filename"`      // base name of the file, informational only
+	Filename    string    `json:"filename"`     // base name of the file, informational only
 	SizeBytes   int64     `json:"size_bytes"`
 	CapturedAt  time.Time `json:"captured_at"` // UTC, truncated to the second; when Aegis hashed the file — NOT proof of origin
 }

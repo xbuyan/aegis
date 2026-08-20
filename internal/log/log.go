@@ -48,7 +48,7 @@ var (
 // Index or LoggedAt — invalidates ChainHash.
 type Entry struct {
 	Index         uint64    `json:"index"`
-	EvidenceHash  string    `json:"evidence_hash"`  // from evidence.Evidence.Hash()
+	EvidenceHash  string    `json:"evidence_hash"`   // from evidence.Evidence.Hash()
 	PrevChainHash string    `json:"prev_chain_hash"` // empty string only for Index 0
 	LoggedAt      time.Time `json:"logged_at"`       // UTC, truncated to the second
 	ChainHash     string    `json:"chain_hash"`
