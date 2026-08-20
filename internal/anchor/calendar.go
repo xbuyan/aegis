@@ -41,19 +41,25 @@ func (c *Calendar) httpClient() *http.Client {
 }
 
 // Submit posts digest (expected to be a 32-byte SHA-256 hash) to the
-// calendar and returns the resulting Timestamp tree, rooted at digest.
-// Immediately after submission this will normally contain a single
-// PendingAttestation for this same calendar's URI — call Upgrade later to
-// check whether it has become a Bitcoin attestation.
-func (c *Calendar) Submit(ctx context.Context, digest []byte) (*Timestamp, error) {
+// calendar and returns the resulting Timestamp tree (rooted at digest)
+// along with the exact raw bytes the calendar returned. Immediately after
+// submission this will normally contain a single PendingAttestation for
+// this same calendar's URI — call Upgrade later to check whether it has
+// become a Bitcoin attestation.
+//
+// The raw bytes are returned alongside the parsed Timestamp so a caller
+// can persist them (e.g. via a pending-anchor store) and re-parse later —
+// Aegis only implements OTS deserialization, not serialization, so the
+// original bytes are the only thing that can be saved and re-loaded.
+func (c *Calendar) Submit(ctx context.Context, digest []byte) (*Timestamp, []byte, error) {
 	target, err := url.JoinPath(c.URL, "digest")
 	if err != nil {
-		return nil, fmt.Errorf("anchor: build submit URL: %w", err)
+		return nil, nil, fmt.Errorf("anchor: build submit URL: %w", err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, strings.NewReader(string(digest)))
 	if err != nil {
-		return nil, fmt.Errorf("anchor: build submit request: %w", err)
+		return nil, nil, fmt.Errorf("anchor: build submit request: %w", err)
 	}
 	req.Header.Set("Accept", "application/vnd.opentimestamps.v1")
 	req.Header.Set("User-Agent", "aegis-anchor/0.1")
@@ -61,66 +67,68 @@ func (c *Calendar) Submit(ctx context.Context, digest []byte) (*Timestamp, error
 
 	resp, err := c.httpClient().Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("anchor: submit to calendar %s: %w", c.URL, err)
+		return nil, nil, fmt.Errorf("anchor: submit to calendar %s: %w", c.URL, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("anchor: calendar %s returned status %d on submit", c.URL, resp.StatusCode)
+		return nil, nil, fmt.Errorf("anchor: calendar %s returned status %d on submit", c.URL, resp.StatusCode)
 	}
 
 	body, err := readLimited(resp.Body, maxCalendarResponseBytes)
 	if err != nil {
-		return nil, fmt.Errorf("anchor: read submit response from %s: %w", c.URL, err)
+		return nil, nil, fmt.Errorf("anchor: read submit response from %s: %w", c.URL, err)
 	}
 
 	ts, err := DeserializeTimestamp(body, digest)
 	if err != nil {
-		return nil, fmt.Errorf("anchor: parse submit response from %s: %w", c.URL, err)
+		return nil, nil, fmt.Errorf("anchor: parse submit response from %s: %w", c.URL, err)
 	}
-	return ts, nil
+	return ts, body, nil
 }
 
 // Upgrade asks the calendar for the current state of a previously
-// submitted digest. Returns ErrCommitmentNotFound if the calendar
-// responds 404 (nothing to report yet — try again later, this is not
-// itself an error to surface as a failure).
-func (c *Calendar) Upgrade(ctx context.Context, digest []byte) (*Timestamp, error) {
+// submitted digest, returning the parsed Timestamp and the raw bytes
+// (see Submit's doc comment for why the raw bytes matter). Returns
+// ErrCommitmentNotFound if the calendar responds 404 (nothing to report
+// yet — try again later, this is not itself an error to surface as a
+// failure).
+func (c *Calendar) Upgrade(ctx context.Context, digest []byte) (*Timestamp, []byte, error) {
 	target, err := url.JoinPath(c.URL, "timestamp", hex.EncodeToString(digest))
 	if err != nil {
-		return nil, fmt.Errorf("anchor: build upgrade URL: %w", err)
+		return nil, nil, fmt.Errorf("anchor: build upgrade URL: %w", err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
-		return nil, fmt.Errorf("anchor: build upgrade request: %w", err)
+		return nil, nil, fmt.Errorf("anchor: build upgrade request: %w", err)
 	}
 	req.Header.Set("Accept", "application/vnd.opentimestamps.v1")
 	req.Header.Set("User-Agent", "aegis-anchor/0.1")
 
 	resp, err := c.httpClient().Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("anchor: upgrade check against calendar %s: %w", c.URL, err)
+		return nil, nil, fmt.Errorf("anchor: upgrade check against calendar %s: %w", c.URL, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusNotFound {
-		return nil, ErrCommitmentNotFound
+		return nil, nil, ErrCommitmentNotFound
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("anchor: calendar %s returned status %d on upgrade", c.URL, resp.StatusCode)
+		return nil, nil, fmt.Errorf("anchor: calendar %s returned status %d on upgrade", c.URL, resp.StatusCode)
 	}
 
 	body, err := readLimited(resp.Body, maxCalendarResponseBytes)
 	if err != nil {
-		return nil, fmt.Errorf("anchor: read upgrade response from %s: %w", c.URL, err)
+		return nil, nil, fmt.Errorf("anchor: read upgrade response from %s: %w", c.URL, err)
 	}
 
 	ts, err := DeserializeTimestamp(body, digest)
 	if err != nil {
-		return nil, fmt.Errorf("anchor: parse upgrade response from %s: %w", c.URL, err)
+		return nil, nil, fmt.Errorf("anchor: parse upgrade response from %s: %w", c.URL, err)
 	}
-	return ts, nil
+	return ts, body, nil
 }
 
 // readLimited reads up to maxBytes from r and errors if more data was

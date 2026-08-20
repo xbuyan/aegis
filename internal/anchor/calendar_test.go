@@ -27,7 +27,7 @@ func TestCalendar_Submit_ParsesPendingResponse(t *testing.T) {
 	defer server.Close()
 
 	cal := &Calendar{URL: server.URL}
-	ts, err := cal.Submit(context.Background(), digest[:])
+	ts, _, err := cal.Submit(context.Background(), digest[:])
 	if err != nil {
 		t.Fatalf("Submit: %v", err)
 	}
@@ -40,6 +40,48 @@ func TestCalendar_Submit_ParsesPendingResponse(t *testing.T) {
 	}
 }
 
+func TestCalendar_Submit_ReturnsRawBytesMatchingParsedResult(t *testing.T) {
+	digest := sha256.Sum256([]byte("evidence content"))
+	wantRaw := append([]byte{0x00}, pendingAttestationBytes("https://example.calendar")...)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write(wantRaw)
+	}))
+	defer server.Close()
+
+	cal := &Calendar{URL: server.URL}
+	ts, raw, err := cal.Submit(context.Background(), digest[:])
+	if err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	if !bytesEqual(raw, wantRaw) {
+		t.Errorf("raw bytes = %x, want %x", raw, wantRaw)
+	}
+
+	// The raw bytes must independently re-parse to the same result Submit
+	// itself returned — this is the whole point of returning them.
+	reparsed, err := DeserializeTimestamp(raw, digest[:])
+	if err != nil {
+		t.Fatalf("re-parsing returned raw bytes: %v", err)
+	}
+	if len(reparsed.Attestations) != len(ts.Attestations) {
+		t.Errorf("re-parsed attestation count = %d, want %d", len(reparsed.Attestations), len(ts.Attestations))
+	}
+}
+
+func bytesEqual(a, b []byte) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func TestCalendar_Submit_NonOKStatusErrors(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -47,7 +89,7 @@ func TestCalendar_Submit_NonOKStatusErrors(t *testing.T) {
 	defer server.Close()
 
 	cal := &Calendar{URL: server.URL}
-	_, err := cal.Submit(context.Background(), make([]byte, 32))
+	_, _, err := cal.Submit(context.Background(), make([]byte, 32))
 	if err == nil {
 		t.Fatal("Submit against a 500 response: want error, got nil")
 	}
@@ -73,7 +115,7 @@ func TestCalendar_Upgrade_ParsesBitcoinAttestation(t *testing.T) {
 	defer server.Close()
 
 	cal := &Calendar{URL: server.URL}
-	ts, err := cal.Upgrade(context.Background(), digest[:])
+	ts, _, err := cal.Upgrade(context.Background(), digest[:])
 	if err != nil {
 		t.Fatalf("Upgrade: %v", err)
 	}
@@ -94,7 +136,7 @@ func TestCalendar_Upgrade_NotFoundReturnsSentinelError(t *testing.T) {
 	defer server.Close()
 
 	cal := &Calendar{URL: server.URL}
-	_, err := cal.Upgrade(context.Background(), make([]byte, 32))
+	_, _, err := cal.Upgrade(context.Background(), make([]byte, 32))
 	if !errors.Is(err, ErrCommitmentNotFound) {
 		t.Errorf("Upgrade error = %v, want ErrCommitmentNotFound", err)
 	}
@@ -109,7 +151,7 @@ func TestCalendar_Submit_OversizedResponseRejected(t *testing.T) {
 	defer server.Close()
 
 	cal := &Calendar{URL: server.URL}
-	_, err := cal.Submit(context.Background(), make([]byte, 32))
+	_, _, err := cal.Submit(context.Background(), make([]byte, 32))
 	if err == nil {
 		t.Fatal("Submit with oversized response: want error, got nil")
 	}

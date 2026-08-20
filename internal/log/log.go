@@ -174,6 +174,54 @@ func (l *Log) Append(evidenceHash string) (*Entry, error) {
 	return &entry, nil
 }
 
+// Entries reads and returns every entry in the log, in order, straight
+// from disk. Unlike Verify, it does not check chain integrity — callers
+// that need both should call Verify first.
+func (l *Log) Entries() ([]Entry, error) {
+	f, err := os.Open(l.path)
+	if err != nil {
+		return nil, fmt.Errorf("log: open %q: %w", l.path, err)
+	}
+	defer f.Close()
+
+	var entries []Entry
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	lineNum := 0
+	for scanner.Scan() {
+		lineNum++
+		line := scanner.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		var e Entry
+		if err := json.Unmarshal(line, &e); err != nil {
+			return nil, fmt.Errorf("%w: line %d: %v", ErrCorruptEntry, lineNum, err)
+		}
+		entries = append(entries, e)
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("log: scan %q: %w", l.path, err)
+	}
+	return entries, nil
+}
+
+// FindByEvidenceHash returns the first entry whose EvidenceHash matches,
+// or nil if none does.
+func (l *Log) FindByEvidenceHash(evidenceHash string) (*Entry, error) {
+	entries, err := l.Entries()
+	if err != nil {
+		return nil, err
+	}
+	for _, e := range entries {
+		if e.EvidenceHash == evidenceHash {
+			found := e
+			return &found, nil
+		}
+	}
+	return nil, nil
+}
+
 // Verify re-reads the entire log file from disk and recomputes the chain
 // from scratch. It returns nil if every entry's ChainHash matches its own
 // fields and every entry's PrevChainHash matches the preceding entry's
