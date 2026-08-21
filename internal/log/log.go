@@ -97,12 +97,20 @@ func readLastEntry(path string) (*Entry, error) {
 		return nil, fmt.Errorf("log: open %q: %w", path, err)
 	}
 	defer f.Close()
+	return readLastEntryFromFile(f)
+}
+
+// readLastEntryFromFile is the same scan as readLastEntry, but against an
+// already-open file handle — used by Append, which needs to read and
+// then write through the same locked handle rather than opening the file
+// twice.
+func readLastEntryFromFile(f *os.File) (*Entry, error) {
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return nil, fmt.Errorf("log: seek to start: %w", err)
+	}
 
 	var last *Entry
 	scanner := bufio.NewScanner(f)
-	// Log entries are small JSON objects, but raise the default token
-	// limit a bit in case of unexpectedly long lines rather than
-	// silently truncating.
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	lineNum := 0
 	for scanner.Scan() {
@@ -119,20 +127,48 @@ func readLastEntry(path string) (*Entry, error) {
 		last = &entryCopy
 	}
 	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("log: scan %q: %w", path, err)
+		return nil, fmt.Errorf("log: scan: %w", err)
 	}
+
+	// Append will Write() next, which appends regardless of the current
+	// seek position on a file opened with O_APPEND — but seeking back to
+	// the end explicitly here avoids relying on that O_APPEND behavior
+	// being the only thing keeping the write position correct.
+	if _, err := f.Seek(0, io.SeekEnd); err != nil {
+		return nil, fmt.Errorf("log: seek to end: %w", err)
+	}
+
 	return last, nil
 }
 
 // Append computes the next entry from evidenceHash and the log's current
 // last entry (read fresh from disk, not cached), writes it to the log
 // file, and returns it.
+//
+// Append holds an exclusive advisory lock on the log file for the
+// duration of the read-then-write (see lockFile's doc comment), so two
+// concurrent Append calls — from two Aegis processes, or two goroutines —
+// cannot race on computing the next Index/PrevChainHash.
 func (l *Log) Append(evidenceHash string) (*Entry, error) {
 	if evidenceHash == "" {
 		return nil, ErrEmptyEvidenceHash
 	}
 
-	last, err := readLastEntry(l.path)
+	// Open once and hold it for both the read and the write, with the
+	// lock held across both — this is what actually closes the race, not
+	// just locking around the write.
+	f, err := os.OpenFile(l.path, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("log: open %q for append: %w", l.path, err)
+	}
+	defer f.Close()
+
+	if err := lockFile(f); err != nil {
+		return nil, err
+	}
+	defer unlockFile(f)
+
+	last, err := readLastEntryFromFile(f)
 	if err != nil {
 		return nil, err
 	}
@@ -160,12 +196,6 @@ func (l *Log) Append(evidenceHash string) (*Entry, error) {
 	if err != nil {
 		return nil, fmt.Errorf("log: marshal entry: %w", err)
 	}
-
-	f, err := os.OpenFile(l.path, os.O_APPEND|os.O_WRONLY, 0o600)
-	if err != nil {
-		return nil, fmt.Errorf("log: open %q for append: %w", l.path, err)
-	}
-	defer f.Close()
 
 	if _, err := f.Write(append(line, '\n')); err != nil {
 		return nil, fmt.Errorf("log: write entry: %w", err)
